@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VLC M3U Handler with Video Download</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        body {
+            @apply bg-gray-900 text-gray-100;
+        }
+        input, textarea, select {
+            @apply bg-gray-800 border-gray-600 text-gray-100 focus:ring-blue-500 focus:border-blue-500;
+        }
+        table {
+            @apply bg-gray-800;
+        }
+        th {
+            @apply bg-gray-700 text-gray-200;
+        }
+        td {
+            @apply border-gray-600;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4">
+    <div class="bg-gray-800 shadow-lg rounded-lg p-6 w-full max-w-4xl">
+        <h1 class="text-2xl font-bold text-center mb-4 text-blue-300">VLC M3U Playlist Handler</h1>
+        
+        <!-- File Upload Section -->
+        <div class="mb-4">
+            <label class="block text-sm font-medium text-gray-300 mb-2">Upload M3U File</label>
+            <input type="file" id="m3uFile" accept=".m3u,.m3u8" class="block w-full text-sm text-gray-400
+                fileipsis mr-4 file:py-2 file:px-4 file:rounded-full file:border-0
+                file:text-sm file:font-semibold file:bg-blue-600 file:text-gray-100
+                hover:file:bg-blue-700">
+        </div>
+
+        <!-- Manual URL Input Section -->
+        <div class="mb-4">
+            <label class="block text-sm font-medium text-gray-300 mb-2">Add URLs Manually</label>
+            <textarea id="manualUrls" rows="4" class="w-full p-2 border rounded-md" placeholder="Paste one URL per line"></textarea>
+            <button id="addUrlsBtn" class="mt-2 bg-green-600 text-gray-100 py-2 px-4 rounded hover:bg-green-700">
+                Add URLs to Playlist
+            </button>
+        </div>
+
+        <!-- Server URLs to M3U Section -->
+        <div class="mb-4">
+            <label class="block text-sm font-medium text-gray-300 mb-2">Convert Server URLs to M3U</label>
+            <textarea id="serverUrls" rows="4" class="w-full p-2 border rounded-md" placeholder="Paste server URLs, one per line (e.g., https://play.netembed.co/tv.php?id=4604&season=1&episode=1)"></textarea>
+            <button id="convertServerUrlsBtn" class="mt-2 bg-indigo-600 text-gray-100 py-2 px-4 rounded hover:bg-indigo-700">
+                Convert to M3U
+            </button>
+            <a id="downloadServerM3uBtn" class="mt-2 ml-2 bg-blue-600 text-gray-100 py-2 px-4 rounded hover:bg-blue-700 hidden" href="#" download="playlist.m3u">
+                Download M3U
+            </a>
+        </div>
+
+        <!-- Website URL Input Section -->
+        <div class="mb-4">
+            <label class="block text-sm font-medium text-gray-300 mb-2">Fetch M3U from Website</label>
+            <input type="text" id="websiteUrl" class="w-full p-2 border rounded-md" placeholder="Enter website URL (e.g., https://example.com)">
+            <button id="fetchM3uBtn" class="mt-2 bg-yellow-600 text-gray-100 py-2 px-4 rounded hover:bg-yellow-700">
+                Fetch M3U Files
+            </button>
+        </div>
+
+        <!-- Playlist Table and Actions -->
+        <div id="playlistTable" class="hidden">
+            <table class="w-full border-collapse border mb-4">
+                <thead>
+                    <tr>
+                        <th class="border p-2">Select</th>
+                        <th class="border p-2">Channel Name</th>
+                        <th class="border p-2">Group</th>
+                        <th class="border p-2">URL</th>
+                        <th class="border p-2">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="playlistBody"></tbody>
+            </table>
+            <div class="flex space-x-4 mb-4">
+                <button id="convertHttpsBtn" class="bg-purple-600 text-gray-100 py-2 px-4 rounded hover:bg-purple-700">
+                    Convert Selected to HTTPS
+                </button>
+                <button id="downloadBtn" class="bg-blue-600 text-gray-100 py-2 px-4 rounded hover:bg-blue-700">
+                    Download M3U
+                </button>
+            </div>
+        </div>
+
+        <!-- M3U Text Display Section -->
+        <div id="m3uTextSection" class="mb-4 hidden">
+            <label class="block text-sm font-medium text-gray-300 mb-2">M3U File Content</label>
+            <textarea id="m3uText" rows="6" class="w-full p-2 border rounded-md bg-gray-700" readonly></textarea>
+        </div>
+
+        <div id="error" class="text-red-400 hidden"></div>
+    </div>
+
+    <script>
+        let channels = [];
+
+        // Parse M3U content
+        function parseM3u(content) {
+            const lines = content.split('\n');
+            const channels = [];
+            let currentChannel = {};
+            
+            for (let line of lines) {
+                line = line.trim();
+                if (!line || line.startsWith('#EXTM3U')) continue;
+                if (line.startsWith('#EXTINF')) {
+                    const parts = line.split(',', 1);
+                    if (parts.length > 1) {
+                        currentChannel.name = parts[1].trim();
+                        let group = '';
+                        if (line.includes('group-title="')) {
+                            const start = line.indexOf('group-title="') + 13;
+                            const end = line.indexOf('"', start);
+                            group = line.slice(start, end);
+                        }
+                        currentChannel.group = group;
+                    }
+                } else if (line && !line.startsWith('#')) {
+                    currentChannel.url = line;
+                    channels.push(currentChannel);
+                    currentChannel = {};
+                }
+            }
+            return channels;
+        }
+
+        // Generate M3U content
+        function generateM3u(channels) {
+            let m3uContent = '#EXTM3U\n';
+            for (let channel of channels) {
+                const group = channel.group ? ` group-title="${channel.group}"` : '';
+                m3uContent += `#EXTINF:-1${group},${channel.name}\n${channel.url}\n`;
+            }
+            return m3uContent;
+        }
+
+        // Convert server URLs to channels locally
+        function convertServerUrlsToChannels(urls, showName = 'Show') {
+            const channels = [];
+            urls.forEach((url, index) => {
+                url = url.trim();
+                if (!url) return;
+
+                try {
+                    const urlObj = new URL(url);
+                    const params = new URLSearchParams(urlObj.search);
+                    const season = params.get('season') || 'Unknown';
+                    const episode = params.get('episode') || 'Unknown';
+                    const showId = params.get('id') || 'Unknown';
+
+                    // Validate URL format
+                    if (!urlObj.pathname.includes('tv.php') || !showId) {
+                        throw new Error(`Invalid URL format: ${url}`);
+                    }
+
+                    // Generate channel name (e.g., "Smallville S01E01")
+                    const seasonStr = season.padStart(2, '0');
+                    const episodeStr = episode.padStart(2, '0');
+                    const channelName = `${showName} S${seasonStr}E${episodeStr}`;
+
+                    channels.push({
+                        name: channelName,
+                        group: `${showName} Season ${season}`,
+                        url: url
+                    });
+                } catch (err) {
+                    console.warn(`Skipping invalid URL: ${url} (${err.message})`);
+                }
+            });
+            return channels;
+        }
+
+        // Render playlist table
+        async function renderPlaylist(channels, playlistBody) {
+            playlistBody.innerHTML = '';
+            for (let index = 0; index < channels.length; index++) {
+                const channel = channels[index];
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td class="border p-2 text-center">
+                        <input type="checkbox" class="select-channel" data-index="${index}">
+                    </td>
+                    <td class="border p-2">${channel.name}</td>
+                    <td class="border p-2">${channel.group || ''}</td>
+                    <td class="border p-2 truncate max-w-xs">${channel.url}</td>
+                    <td class="border p-2">
+                        <button class="download-video-btn bg-green-600 text-gray-100 py-1 px-2 rounded hover:bg-green-700" data-index="${index}">
+                            Download Video
+                        </button>
+                        <span class="download-status text-sm text-gray-400 hidden" data-index="${index}"></span>
+                    </td>
+                `;
+                playlistBody.appendChild(row);
+            }
+
+            const m3uTextArea = document.getElementById('m3uText');
+            const m3uTextSection = document.getElementById('m3uTextSection');
+            if (channels.length > 0) {
+                const m3uContent = generateM3u(channels);
+                m3uTextArea.value = m3uContent;
+                m3uTextSection.classList.remove('hidden');
+            } else {
+                m3uTextArea.value = '';
+                m3uTextSection.classList.add('hidden');
+            }
+        }
+
+        // File input event listener
+        document.getElementById('m3uFile').addEventListener('change', async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const errorDiv = document.getElementById('error');
+            const playlistTable = document.getElementById('playlistTable');
+            const playlistBody = document.getElementById('playlistBody');
+
+            try {
+                const text = await file.text();
+                channels = parseM3u(text);
+                await renderPlaylist(channels, playlistBody);
+                errorDiv.classList.add('hidden');
+                playlistTable.classList.remove('hidden');
+            } catch (err) {
+                errorDiv.textContent = 'Error: ' + err.message;
+                errorDiv.classList.remove('hidden');
+                playlistTable.classList.add('hidden');
+            }
+        });
+
+        // Manual URLs event listener
+        document.getElementById('addUrlsBtn').addEventListener('click', async () => {
+            const manualUrls = document.getElementById('manualUrls').value;
+            const errorDiv = document.getElementById('error');
+            const playlistTable = document.getElementById('playlistTable');
+            const playlistBody = document.getElementById('playlistBody');
+
+            try {
+                const urls = manualUrls.split('\n').filter(url => url.trim());
+                if (urls.length === 0) {
+                    throw new Error('No valid URLs provided.');
+                }
+
+                const newChannels = urls.map((url, i) => ({
+                    name: `Channel ${i + 1}`,
+                    group: 'Manual',
+                    url: url.trim(),
+                }));
+                channels = channels.concat(newChannels);
+                await renderPlaylist(channels, playlistBody);
+                errorDiv.classList.add('hidden');
+                playlistTable.classList.remove('hidden');
+                document.getElementById('manualUrls').value = '';
+            } catch (err) {
+                errorDiv.textContent = 'Error adding URLs: ' + err.message;
+                errorDiv.classList.remove('hidden');
+            }
+        });
+
+        // Convert server URLs to M3U event listener
+        document.getElementById('convertServerUrlsBtn').addEventListener('click', async () => {
+            const serverUrls = document.getElementById('serverUrls').value;
+            const errorDiv = document.getElementById('error');
+            const downloadServerM3uBtn = document.getElementById('downloadServerM3uBtn');
+            const playlistTable = document.getElementById('playlistTable');
+            const playlistBody = document.getElementById('playlistBody');
+
+            try {
+                const urls = serverUrls.split('\n').filter(url => url.trim());
+                if (urls.length === 0) {
+                    throw new Error('No valid URLs provided.');
+                }
+
+                // Use "Smallville" as show name; change to "Teen Titans Go!" if needed
+                const newChannels = convertServerUrlsToChannels(urls, 'Smallville');
+                if (newChannels.length === 0) {
+                    throw new Error('No valid server URLs could be processed.');
+                }
+
+                channels = channels.concat(newChannels);
+                await renderPlaylist(channels, playlistBody);
+
+                // Generate M3U and enable download
+                const m3uContent = generateM3u(newChannels);
+                const blob = new Blob([m3uContent], { type: 'audio/mpegurl' });
+                const url = URL.createObjectURL(blob);
+                downloadServerM3uBtn.href = url;
+                downloadServerM3uBtn.download = 'smallville.m3u';
+                downloadServerM3uBtn.classList.remove('hidden');
+
+                errorDiv.classList.add('hidden');
+                playlistTable.classList.remove('hidden');
+            } catch (err) {
+                errorDiv.textContent = 'Error converting URLs to M3U: ' + err.message;
+                errorDiv.classList.remove('hidden');
+            }
+        });
+
+        // Fetch M3U from website event listener
+        document.getElementById('fetchM3uBtn').addEventListener('click', async () => {
+            const websiteUrl = document.getElementById('websiteUrl').value.trim();
+            const errorDiv = document.getElementById('error');
+            const playlistTable = document.getElementById('playlistTable');
+            const playlistBody = document.getElementById('playlistBody');
+
+            if (!websiteUrl) {
+                errorDiv.textContent = 'Please enter a valid website URL (e.g., https://example.com).';
+                errorDiv.classList.remove('hidden');
+                return;
+            }
+
+            try {
+                let url = new URL(websiteUrl.startsWith('http') ? websiteUrl : 'https://' + websiteUrl);
+                const response = await fetch(url.href, {
+                    headers: { 'Accept': 'text/html,application/xhtml+xml,application/xml' },
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+                }
+                const htmlContent = await response.text();
+                const m3uPattern = /(?:href|src)=["']([^"']+\.(m3u|m3u8))["']|https?:\/\/[^"\s]+\.(m3u|m3u8)/g;
+                const urls = [...htmlContent.matchAll(m3uPattern)].map(match => match[1] || match[2]);
+                const uniqueUrls = [...new Set(urls)];
+
+                const newChannels = uniqueUrls.map((url, i) => {
+                    const cleanUrl = url.split('?')[0].split('#')[0];
+                    const absoluteUrl = cleanUrl.startsWith('http') ? cleanUrl : new URL(cleanUrl, url.href).href;
+                    return {
+                        name: `Website Stream ${i + 1}`,
+                        group: 'Website',
+                        url: absoluteUrl,
+                    };
+                });
+
+                if (newChannels.length === 0) {
+                    errorDiv.textContent = 'No .m3u or .m3u8 files found.';
+                    errorDiv.classList.remove('hidden');
+                } else {
+                    channels = channels.concat(newChannels);
+                    await renderPlaylist(channels, playlistBody);
+                    errorDiv.classList.add('hidden');
+                    playlistTable.classList.remove('hidden');
+                    document.getElementById('websiteUrl').value = '';
+                }
+            } catch (err) {
+                errorDiv.textContent = 'Error fetching M3U files: ' + err.message;
+                errorDiv.classList.remove('hidden');
+            }
+        });
+
+        // Convert to HTTPS event listener
+        document.getElementById('convertHttpsBtn').addEventListener('click', async () => {
+            const errorDiv = document.getElementById('error');
+            const playlistBody = document.getElementById('playlistBody');
+            const checkboxes = document.querySelectorAll('.select-channel:checked');
+            const selectedIndices = Array.from(checkboxes).map(cb => parseInt(cb.dataset.index));
+
+            if (selectedIndices.length === 0) {
+                errorDiv.textContent = 'No channels selected for conversion.';
+                errorDiv.classList.remove('hidden');
+                return;
+            }
+
+            try {
+                const updatedChannels = channels.map((channel, idx) => {
+                    if (selectedIndices.includes(idx) && channel.url.startsWith('http://')) {
+                        return { ...channel, url: 'https://' + channel.url.slice(7) };
+                    }
+                    return channel;
+                });
+                channels = updatedChannels;
+                await renderPlaylist(channels, playlistBody);
+                errorDiv.classList.add('hidden');
+            } catch (err) {
+                errorDiv.textContent = 'Error converting URLs: ' + err.message;
+                errorDiv.classList.remove('hidden');
+            }
+        });
+
+        // Download M3U button event listener
+        document.getElementById('downloadBtn').addEventListener('click', () => {
+            const errorDiv = document.getElementById('error');
+            try {
+                if (channels.length === 0) {
+                    throw new Error('No channels available to generate M3U.');
+                }
+                const m3uContent = generateM3u(channels);
+                const blob = new Blob([m3uContent], { type: 'audio/mpegurl' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'playlist.m3u';
+                a.click();
+                URL.revokeObjectURL(url);
+                errorDiv.classList.add('hidden');
+            } catch (err) {
+                errorDiv.textContent = 'Error generating M3U: ' + err.message;
+                errorDiv.classList.remove('hidden');
+            }
+        });
+    </script>
+</body>
+</html>
